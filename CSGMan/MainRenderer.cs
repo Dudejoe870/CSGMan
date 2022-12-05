@@ -106,21 +106,21 @@ void main()
                 (uint)Marshal.SizeOf<CameraInfo>(), 
                 BufferUsage.UniformBuffer));
 
-            var shape1 = new Sphere(new Vector3(0.0f, 0.0f, 0.0f), 1.0f, 16);
+            var shape1 = new Cylinder(new Vector3(0.0f, 5.0f, 0.0f), new Vector3(0.0f, -5.0f, 0.0f), 1.0f, 16);
             var shape2 = new Cube(position: new Vector3(0, 0, 0), size: new Vector3(2.0f, 0.50f, 0.50f));
-            var result = Shape.Subtract(shape1, shape2);
+            var result = Shape.Subtract(shape2, shape1);
 
             _vertexBuffer = _factory.CreateBuffer(new BufferDescription(
-                (uint)shape1.Vertices.Length * Vertex.SizeInBytes,
+                (uint)result.Vertices.Length * Vertex.SizeInBytes,
                 BufferUsage.VertexBuffer));
             _indexBuffer = _factory.CreateBuffer(new BufferDescription(
-                (uint)shape1.Indices.Length * sizeof(uint),
+                (uint)result.Indices.Length * sizeof(uint),
                 BufferUsage.IndexBuffer));
 
-            _gd.UpdateBuffer(_vertexBuffer, 0, shape1.Vertices);
-            _gd.UpdateBuffer(_indexBuffer, 0, shape1.Indices);
+            _gd.UpdateBuffer(_vertexBuffer, 0, result.Vertices);
+            _gd.UpdateBuffer(_indexBuffer, 0, result.Indices);
 
-            _indexCount = (uint)shape1.Indices.Length;
+            _indexCount = (uint)result.Indices.Length;
 
             _resourceLayout = _factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("CameraBuffer", ResourceKind.UniformBuffer, ShaderStages.Vertex)));

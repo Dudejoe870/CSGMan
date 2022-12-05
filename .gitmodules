@@ -1,0 +1,3 @@
+[submodule "modules/CSG"]
+	path = modules/CSG
+	url = https://github.com/Dudejoe870/CSG.git
