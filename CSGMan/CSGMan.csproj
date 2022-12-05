@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CSGeometry" Version="1.2.3-g79a60a345b" />
+    <PackageReference Include="ImGui.NET" Version="1.88.0" />
+	<PackageReference Include="Veldrid" Version="4.9.0-beta2" />
+    <PackageReference Include="Veldrid.ImGui" Version="5.87.0-g181a86f652" />
+    <PackageReference Include="Veldrid.SPIRV" Version="1.0.15" />
+    <PackageReference Include="Veldrid.StartupUtilities" Version="4.9.0-beta2" />
+  </ItemGroup>
+
+</Project>
