@@ -7,7 +7,6 @@ using System.Numerics;
 using System.Text;
 using Veldrid.SPIRV;
 using System.Runtime.InteropServices;
-using System.Runtime.CompilerServices;
 using CSG;
 using CSG.Shapes;
 
@@ -22,6 +21,12 @@ namespace CSGMan
 
         private CommandList _cl;
 
+        private static Texture? _viewportTex;
+        private static nint _viewportTexId = -1;
+        private static Texture? _viewportDepthTex;
+        private static Framebuffer? _viewportFb;
+        private static Vector2 _lastViewportSize = Vector2.Zero;
+
         private static DeviceBuffer _vertexBuffer;
         private static DeviceBuffer _indexBuffer;
         private static uint _indexCount;
@@ -32,8 +37,9 @@ namespace CSGMan
         private static ResourceLayout _resourceLayout;
 
         private static Shader[] _shaders;
-        private static Pipeline _pipeline;
-        
+        private static Pipeline? _pipeline = null;
+        private static GraphicsPipelineDescription _pipelineDescription;
+
         private static Vector3 _camPos;
         private static Vector3 _camFwd;
 
@@ -57,7 +63,7 @@ layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 UV;
 layout(location = 3) in vec4 Color;
 
-layout(location = 0) out flat vec4 fsin_Color;
+layout(location = 0) out vec3 fsin_Normal;
 
 layout(set = 0, binding = 0) uniform CameraBuffer
 {
@@ -67,18 +73,19 @@ layout(set = 0, binding = 0) uniform CameraBuffer
 void main()
 {
     gl_Position = vp * vec4(Position, 1);
-    fsin_Color = vec4(Normal, 1);
+    fsin_Normal = Normal;
 }";
 
         private const string _fragmentCode = @"
 #version 460
 
-layout(location = 0) in flat vec4 fsin_Color;
+layout(location = 0) in vec3 fsin_Normal;
 layout(location = 0) out vec4 fsout_Color;
 
 void main()
 {
-    fsout_Color = fsin_Color;
+    float light = dot(normalize(vec3(0.5, 0.5, 0.0)), fsin_Normal);
+    fsout_Color = vec4(vec3(light), 1);
 }";
 
         public MainRenderer()
@@ -97,8 +104,7 @@ void main()
                 PreferStandardClipSpaceYDirection = true,
                 PreferDepthRangeZeroToOne = true,
                 ResourceBindingModel = ResourceBindingModel.Improved,
-                Debug = true,
-                SwapchainDepthFormat = PixelFormat.D24_UNorm_S8_UInt,
+                Debug = true
             });
             _factory = _gd.ResourceFactory;
 
@@ -106,9 +112,10 @@ void main()
                 (uint)Marshal.SizeOf<CameraInfo>(), 
                 BufferUsage.UniformBuffer));
 
-            var shape1 = new Cylinder(new Vector3(0.0f, 5.0f, 0.0f), new Vector3(0.0f, -5.0f, 0.0f), 1.0f, 16);
-            var shape2 = new Cube(position: new Vector3(0, 0, 0), size: new Vector3(2.0f, 0.50f, 0.50f));
-            var result = Shape.Subtract(shape2, shape1);
+            //Cube shape1 = new(position: new Vector3(0, 0, 0), size: new Vector3(1.0f, 1.00f, 1.00f));
+            Cylinder shape1 = new(start: new Vector3(0, 2, 0), end: new Vector3(0, -2, 0), radius: 2, tessellation: 16);
+            Cube shape2 = new(position: new Vector3(0, 0, 0), size: new Vector3(2, 1, 1));
+            var result = shape1.Subtract(shape2);
 
             _vertexBuffer = _factory.CreateBuffer(new BufferDescription(
                 (uint)result.Vertices.Length * Vertex.SizeInBytes,
@@ -143,25 +150,23 @@ void main()
 
             _shaders = _factory.CreateFromSpirv(vertexShaderDesc, fragmentShaderDesc);
 
-            GraphicsPipelineDescription pipelineDescription = new();
-            pipelineDescription.BlendState = BlendStateDescription.SingleOverrideBlend;
-            pipelineDescription.DepthStencilState = new DepthStencilStateDescription(
+            _pipelineDescription = new();
+            _pipelineDescription.BlendState = BlendStateDescription.SingleOverrideBlend;
+            _pipelineDescription.DepthStencilState = new DepthStencilStateDescription(
                 depthTestEnabled: true,
                 depthWriteEnabled: true,
                 comparisonKind: ComparisonKind.LessEqual);
-            pipelineDescription.RasterizerState = new RasterizerStateDescription(
+            _pipelineDescription.RasterizerState = new RasterizerStateDescription(
                 cullMode: FaceCullMode.Back,
                 fillMode: PolygonFillMode.Solid,
                 frontFace: FrontFace.Clockwise,
                 depthClipEnabled: true,
                 scissorTestEnabled: false);
-            pipelineDescription.PrimitiveTopology = PrimitiveTopology.TriangleList;
-            pipelineDescription.ResourceLayouts = new ResourceLayout[] { _resourceLayout };
-            pipelineDescription.ShaderSet = new ShaderSetDescription(
+            _pipelineDescription.PrimitiveTopology = PrimitiveTopology.TriangleList;
+            _pipelineDescription.ResourceLayouts = new ResourceLayout[] { _resourceLayout };
+            _pipelineDescription.ShaderSet = new ShaderSetDescription(
                 vertexLayouts: new VertexLayoutDescription[] { vertexLayout },
                 shaders: _shaders);
-            pipelineDescription.Outputs = _gd.SwapchainFramebuffer.OutputDescription;
-            _pipeline = _factory.CreateGraphicsPipeline(pipelineDescription);
 
             _cl = _gd.ResourceFactory.CreateCommandList();
             _imguiRenderer = new ImGuiRenderer(_gd, _gd.MainSwapchain.Framebuffer.OutputDescription,
@@ -187,6 +192,41 @@ void main()
             return !_window.Exists;
         }
 
+        private void ResizeViewport(Vector2 size)
+        {
+            _gd.WaitForIdle();
+
+            if (_viewportTex != null)
+            {
+                _imguiRenderer.RemoveImGuiBinding(_viewportTex);
+                _viewportTex.Dispose();
+            }
+            if (_viewportDepthTex != null)
+                _viewportDepthTex.Dispose();
+            if (_viewportFb != null)
+                _viewportFb.Dispose();
+
+            _viewportTex = _factory.CreateTexture(new TextureDescription(
+                (uint)size.X, (uint)size.Y, 1, 1, 1, 
+                PixelFormat.R8_G8_B8_A8_UNorm, 
+                TextureUsage.Sampled | TextureUsage.RenderTarget, 
+                TextureType.Texture2D));
+            _viewportDepthTex = _factory.CreateTexture(new TextureDescription(
+                (uint)size.X, (uint)size.Y, 1, 1, 1,
+                PixelFormat.D24_UNorm_S8_UInt,
+                TextureUsage.DepthStencil,
+                TextureType.Texture2D));
+            _viewportFb = _factory.CreateFramebuffer(new FramebufferDescription(
+                _viewportDepthTex, _viewportTex));
+            _viewportTexId = _imguiRenderer.GetOrCreateImGuiBinding(_factory, _viewportTex);
+
+            if (_pipeline == null)
+            {
+                _pipelineDescription.Outputs = _viewportFb.OutputDescription;
+                _pipeline = _factory.CreateGraphicsPipeline(_pipelineDescription);
+            }
+        }
+
         public void Render()
         {
             InputSnapshot input = _window.PumpEvents();
@@ -197,15 +237,41 @@ void main()
 
             _imguiRenderer.Update((float)deltaTime, input);
 
-            if (ImGui.Begin("Camera"))
+            float windowWidth = _window.Width;
+            float windowHeight = _window.Height;
+
+            float sidebarWidth = windowWidth * 0.15f;
+
+            ImGui.SetNextWindowSize(new Vector2(sidebarWidth, windowHeight), ImGuiCond.Always);
+            ImGui.SetNextWindowPos(Vector2.Zero, ImGuiCond.Always);
+            ImGui.Begin("Sidebar", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove);
             {
-                ImGui.DragFloat3("Position: ", ref _camPos, 0.1f);
-                ImGui.DragFloat3("Forward: ", ref _camFwd, 0.1f);
+                ImGui.DragFloat3("Camera Position", ref _camPos, 0.1f);
+                ImGui.DragFloat3("Camera Forward", ref _camFwd, 0.1f);
             }
             ImGui.End();
 
-            float width = _gd.MainSwapchain.Framebuffer.Width;
-            float height = _gd.MainSwapchain.Framebuffer.Height;
+            ImGui.SetNextWindowSize(new Vector2((windowWidth - sidebarWidth) / 2.0f, windowHeight / 2.0f), ImGuiCond.Always);
+            ImGui.SetNextWindowPos(new Vector2(sidebarWidth, 0.0f), ImGuiCond.Always);
+            ImGui.Begin("TopLeftViewport", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove);
+            {
+                Vector2 contentRegion = ImGui.GetContentRegionAvail();
+
+                if (contentRegion.X > 1 && contentRegion.Y > 1)
+                {
+                    if (contentRegion != _lastViewportSize)
+                    {
+                        ResizeViewport(contentRegion);
+                    }
+                    _lastViewportSize = contentRegion;
+
+                    ImGui.Image(_viewportTexId, contentRegion);
+                }
+            }
+            ImGui.End();
+
+            float width = _viewportFb.Width;
+            float height = _viewportFb.Height;
             Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(90.0f * (MathF.PI / 180.0f), width / height, 0.01f, 1000.0f);
             Matrix4x4 view = Matrix4x4.CreateLookAt(_camPos, _camPos + Vector3.Normalize(_camFwd), Vector3.UnitY);
 
@@ -216,8 +282,8 @@ void main()
 
             _cl.Begin();
             {
-                _cl.SetFramebuffer(_gd.MainSwapchain.Framebuffer);
-                _cl.ClearColorTarget(0, RgbaFloat.Black);
+                _cl.SetFramebuffer(_viewportFb);
+                _cl.ClearColorTarget(0, new RgbaFloat(0.5f, 0.5f, 0.5f, 1.0f));
                 _cl.ClearDepthStencil(1);
 
                 _cl.UpdateBuffer(_cameraBuffer, 0, info);
@@ -234,7 +300,9 @@ void main()
                     vertexOffset: 0,
                     instanceStart: 0);
 
-                _imguiRenderer.Render(_gd, _cl);
+                _cl.SetFramebuffer(_gd.MainSwapchain.Framebuffer);
+                _cl.ClearColorTarget(0, RgbaFloat.Black);
+                _imguiRenderer.Render(_gd, _cl);                
             }
             _cl.End();
 
@@ -258,8 +326,13 @@ void main()
                 {
                     _gd.WaitForIdle();
 
+                    _viewportTex?.Dispose();
+                    _viewportDepthTex?.Dispose();
+                    _viewportFb?.Dispose();
+                    
                     _imguiRenderer.Dispose();
-                    _pipeline.Dispose();
+                    _cameraBuffer.Dispose();
+                    _pipeline?.Dispose();
                     foreach (Shader shader in _shaders)
                         shader.Dispose();
                     _resourceLayout.Dispose();
