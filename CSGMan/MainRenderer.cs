@@ -21,11 +21,17 @@ namespace CSGMan
 
         private CommandList _cl;
 
+        private const float _mouseSensitivity = 0.5f;
+
         private static Texture? _viewportTex;
         private static nint _viewportTexId = -1;
         private static Texture? _viewportDepthTex;
         private static Framebuffer? _viewportFb;
         private static Vector2 _lastViewportSize = Vector2.Zero;
+        private static bool _isMouseControllingViewport = false;
+        private static Vector2 _lastViewportMousePos = Vector2.Zero;
+        private static float _viewportYaw = -90.0f;
+        private static float _viewportPitch = 0.0f;
 
         private static DeviceBuffer _vertexBuffer;
         private static DeviceBuffer _indexBuffer;
@@ -42,10 +48,12 @@ namespace CSGMan
 
         private static Vector3 _camPos;
         private static Vector3 _camFwd;
+        private static Vector3 _camUp = Vector3.UnitY;
 
         private struct CameraInfo
         {
             public Matrix4x4 vp;
+            public Vector4 pos;
         }
 
         private ImGuiRenderer _imguiRenderer;
@@ -64,15 +72,19 @@ layout(location = 2) in vec2 UV;
 layout(location = 3) in vec4 Color;
 
 layout(location = 0) out vec3 fsin_Normal;
+layout(location = 1) out flat vec3 fsin_LightDir;
 
 layout(set = 0, binding = 0) uniform CameraBuffer
 {
     mat4 vp;
+    vec3 camPos;
 };
 
 void main()
 {
     gl_Position = vp * vec4(Position, 1);
+
+    fsin_LightDir = normalize(camPos);
     fsin_Normal = Normal;
 }";
 
@@ -80,11 +92,13 @@ void main()
 #version 460
 
 layout(location = 0) in vec3 fsin_Normal;
+layout(location = 1) in flat vec3 fsin_LightDir;
+
 layout(location = 0) out vec4 fsout_Color;
 
 void main()
 {
-    float light = dot(normalize(vec3(0.5, 0.5, 0.0)), fsin_Normal);
+    float light = dot(fsin_LightDir, fsin_Normal);
     fsout_Color = vec4(vec3(light), 1);
 }";
 
@@ -112,10 +126,11 @@ void main()
                 (uint)Marshal.SizeOf<CameraInfo>(), 
                 BufferUsage.UniformBuffer));
 
-            //Cube shape1 = new(position: new Vector3(0, 0, 0), size: new Vector3(1.0f, 1.00f, 1.00f));
             Cylinder shape1 = new(start: new Vector3(0, 2, 0), end: new Vector3(0, -2, 0), radius: 2, tessellation: 16);
             Cube shape2 = new(position: new Vector3(0, 0, 0), size: new Vector3(2, 1, 1));
-            var result = shape1.Subtract(shape2);
+            var shape3 = shape1.Subtract(shape2);
+            Cube shape4 = new(position: new Vector3(0, 0, 0), size: new Vector3(3, 2, 3));
+            var result = shape4.Subtract(shape3);
 
             _vertexBuffer = _factory.CreateBuffer(new BufferDescription(
                 (uint)result.Vertices.Length * Vertex.SizeInBytes,
@@ -246,17 +261,65 @@ void main()
             ImGui.SetNextWindowPos(Vector2.Zero, ImGuiCond.Always);
             ImGui.Begin("Sidebar", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove);
             {
-                ImGui.DragFloat3("Camera Position", ref _camPos, 0.1f);
-                ImGui.DragFloat3("Camera Forward", ref _camFwd, 0.1f);
             }
             ImGui.End();
 
             ImGui.SetNextWindowSize(new Vector2((windowWidth - sidebarWidth) / 2.0f, windowHeight / 2.0f), ImGuiCond.Always);
             ImGui.SetNextWindowPos(new Vector2(sidebarWidth, 0.0f), ImGuiCond.Always);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
             ImGui.Begin("TopLeftViewport", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove);
             {
-                Vector2 contentRegion = ImGui.GetContentRegionAvail();
+                Vector2 viewportMousePos = ImGui.GetMousePos() - ImGui.GetWindowPos();
+                Vector2 deltaMouse = viewportMousePos - _lastViewportMousePos;
+                if (ImGui.IsWindowHovered())
+                    _isMouseControllingViewport = ImGui.IsMouseDown(ImGuiMouseButton.Right);
+                else
+                {
+                    if (ImGui.IsMouseReleased(ImGuiMouseButton.Right))
+                        _isMouseControllingViewport = false;
+                }
 
+                if (_isMouseControllingViewport)
+                {
+                    _viewportYaw += deltaMouse.X * _mouseSensitivity;
+                    _viewportPitch += deltaMouse.Y * -_mouseSensitivity;
+
+                    if (_viewportPitch > 89.0f)
+                        _viewportPitch = 89.0f;
+                    if (_viewportPitch < -89.0f)
+                        _viewportPitch = -89.0f;
+                }
+
+                _camFwd.X = 
+                    MathF.Cos(MathF.PI * _viewportYaw / 180) *
+                    MathF.Cos(MathF.PI * _viewportPitch / 180);
+                _camFwd.Y = 
+                    MathF.Sin(MathF.PI * _viewportPitch / 180);
+                _camFwd.Z =
+                    MathF.Sin(MathF.PI * _viewportYaw / 180) *
+                    MathF.Cos(MathF.PI * _viewportPitch / 180);
+                _camFwd = Vector3.Normalize(_camFwd);
+
+                var camRight = Vector3.Cross(_camFwd, Vector3.UnitY);
+                _camUp = Vector3.Cross(camRight, _camFwd);
+
+                if (ImGui.IsWindowHovered() || _isMouseControllingViewport)
+                {
+                    if (ImGui.IsKeyDown(ImGuiKey.D))
+                        _camPos += camRight * (float)deltaTime * 10.0f;
+                    if (ImGui.IsKeyDown(ImGuiKey.A))
+                        _camPos += -camRight * (float)deltaTime * 10.0f;
+                    if (ImGui.IsKeyDown(ImGuiKey.W))
+                        _camPos += _camFwd * (float)deltaTime * 10.0f;
+                    if (ImGui.IsKeyDown(ImGuiKey.S))
+                        _camPos += -_camFwd * (float)deltaTime * 10.0f;
+                    if (ImGui.IsKeyDown(ImGuiKey.Space))
+                        _camPos += Vector3.UnitY * (float)deltaTime * 10.0f;
+                    if (ImGui.IsKeyDown(ImGuiKey.ModShift))
+                        _camPos += -Vector3.UnitY * (float)deltaTime * 10.0f;
+                }
+
+                Vector2 contentRegion = ImGui.GetContentRegionAvail();
                 if (contentRegion.X > 1 && contentRegion.Y > 1)
                 {
                     if (contentRegion != _lastViewportSize)
@@ -267,23 +330,27 @@ void main()
 
                     ImGui.Image(_viewportTexId, contentRegion);
                 }
+
+                _lastViewportMousePos = viewportMousePos;
             }
+            ImGui.PopStyleVar();
             ImGui.End();
 
             float width = _viewportFb.Width;
             float height = _viewportFb.Height;
             Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(90.0f * (MathF.PI / 180.0f), width / height, 0.01f, 1000.0f);
-            Matrix4x4 view = Matrix4x4.CreateLookAt(_camPos, _camPos + Vector3.Normalize(_camFwd), Vector3.UnitY);
+            Matrix4x4 view = Matrix4x4.CreateLookAt(_camPos, _camPos + _camFwd, _camUp);
 
             CameraInfo info = new()
             {
-                vp = view * projection
+                vp = view * projection,
+                pos = new Vector4(_camPos, 1.0f)
             };
 
             _cl.Begin();
             {
                 _cl.SetFramebuffer(_viewportFb);
-                _cl.ClearColorTarget(0, new RgbaFloat(0.5f, 0.5f, 0.5f, 1.0f));
+                _cl.ClearColorTarget(0, new RgbaFloat(0.25f, 0.25f, 0.25f, 1.0f));
                 _cl.ClearDepthStencil(1);
 
                 _cl.UpdateBuffer(_cameraBuffer, 0, info);
