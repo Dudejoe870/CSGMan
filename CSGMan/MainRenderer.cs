@@ -12,8 +12,10 @@ using System.Runtime.CompilerServices;
 
 namespace CSGMan
 {
-    internal class MainRenderer : IDisposable
+    public class MainRenderer : IDisposable
     {
+        private CSGScene scene;
+
         private Sdl2Window _window;
         private GraphicsDevice _gd;
 
@@ -44,14 +46,14 @@ namespace CSGMan
             public Vector3 forward = -Vector3.UnitZ;
             public Vector3 up = Vector3.UnitY;
 
-            public Camera(GraphicsDevice gd, ResourceFactory factory)
+            public Camera(GraphicsDevice gd, ResourceFactory factory, ResourceLayout resourceLayout)
             {
                 _gd = gd;
 
                 cameraInfoBuffer = factory.CreateBuffer(new BufferDescription(
                     (uint)Unsafe.SizeOf<GpuCameraInfo>(),
                     BufferUsage.UniformBuffer));
-                resourceSet = factory.CreateResourceSet(new ResourceSetDescription(_resourceLayout, cameraInfoBuffer));
+                resourceSet = factory.CreateResourceSet(new ResourceSetDescription(resourceLayout, cameraInfoBuffer));
             }
 
             public void UploadToGPU(CommandList cl)
@@ -92,6 +94,10 @@ namespace CSGMan
             private GraphicsDevice _gd;
             private ResourceFactory _factory;
             private ImGuiRenderer _imguiRenderer;
+            private Pipeline _pipeline;
+            private CSGScene.Built _scene;
+
+            private string name;
 
             public Camera camera;
 
@@ -107,13 +113,16 @@ namespace CSGMan
             public float yaw = -90.0f;
             public float pitch = 0.0f;
 
-            public Viewport(GraphicsDevice gd, ResourceFactory factory, ImGuiRenderer imguiRenderer)
+            public Viewport(GraphicsDevice gd, ResourceFactory factory, ImGuiRenderer imguiRenderer, ResourceLayout resourceLayout, Pipeline pipeline, CSGScene.Built scene, string name)
             {
                 _factory = factory;
                 _gd = gd;
                 _imguiRenderer = imguiRenderer;
+                _pipeline = pipeline;
+                _scene = scene;
 
-                camera = new Camera(gd, factory);
+                camera = new Camera(gd, factory, resourceLayout);
+                this.name = name;
             }
 
             public void Resize(Vector2 size)
@@ -206,8 +215,11 @@ namespace CSGMan
 
                     ImGui.GetWindowDrawList().AddImage(texId, ImGui.GetWindowPos(), ImGui.GetWindowPos() + windowSize);
                 }
-
                 _lastMousePos = mousePos;
+
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.1f, 0.1f, 0.1f, 1.0f));
+                ImGui.TextUnformatted(name);
+                ImGui.PopStyleColor();
 
                 camera.Update(new Vector2(framebuffer.Width, framebuffer.Height));
             }
@@ -222,15 +234,7 @@ namespace CSGMan
 
                 cl.SetPipeline(_pipeline);
                 camera.Bind(cl);
-
-                cl.SetVertexBuffer(0, _vertexBuffer);
-                cl.SetIndexBuffer(_indexBuffer, IndexFormat.UInt32);
-                cl.DrawIndexed(
-                    indexCount: _indexCount,
-                    instanceCount: 1,
-                    indexStart: 0,
-                    vertexOffset: 0,
-                    instanceStart: 0);
+                _scene.Draw(cl);
             }
 
             public void Dispose()
@@ -245,19 +249,17 @@ namespace CSGMan
             }
         }
 
-        private static Viewport _topLeftViewport;
-        private static Viewport _topRightViewport;
-        private static Viewport _bottomLeftViewport;
-        private static Viewport _bottomRightViewport;
+        private Viewport _topLeftViewport;
+        private Viewport _topRightViewport;
+        private Viewport _bottomLeftViewport;
+        private Viewport _bottomRightViewport;
 
-        private static DeviceBuffer _vertexBuffer;
-        private static DeviceBuffer _indexBuffer;
-        private static uint _indexCount;
+        private ResourceLayout _resourceLayout;
 
-        private static ResourceLayout _resourceLayout;
+        private Shader[] _shaders;
+        private Pipeline? _pipeline = null;
 
-        private static Shader[] _shaders;
-        private static Pipeline? _pipeline = null;
+        private CSGScene.Built _builtScene;
 
         private ImGuiRenderer _imguiRenderer;
 
@@ -305,7 +307,7 @@ void main()
     fsout_Color = vec4(vec3(light), 1);
 }";
 
-        public MainRenderer()
+        public MainRenderer(CSGScene scene)
         {
             _window = VeldridStartup.CreateWindow(new WindowCreateInfo()
             {
@@ -325,34 +327,8 @@ void main()
             });
             _factory = _gd.ResourceFactory;
 
-            
-
-            Cylinder shape1 = new(start: new Vector3(0, 2, 0), end: new Vector3(0, -2, 0), radius: 2, tessellation: 16);
-            Cube shape2 = new(position: new Vector3(0, 0, 0), size: new Vector3(2, 1, 1));
-            var shape3 = shape1.Subtract(shape2);
-            Cube shape4 = new(position: new Vector3(0, 0, 0), size: new Vector3(3, 2, 3));
-            var result = shape4.Subtract(shape3);
-
-            _vertexBuffer = _factory.CreateBuffer(new BufferDescription(
-                (uint)result.Vertices.Length * Vertex.SizeInBytes,
-                BufferUsage.VertexBuffer));
-            _indexBuffer = _factory.CreateBuffer(new BufferDescription(
-                (uint)result.Indices.Length * sizeof(uint),
-                BufferUsage.IndexBuffer));
-
-            _gd.UpdateBuffer(_vertexBuffer, 0, result.Vertices);
-            _gd.UpdateBuffer(_indexBuffer, 0, result.Indices);
-
-            _indexCount = (uint)result.Indices.Length;
-
             _resourceLayout = _factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("CameraBuffer", ResourceKind.UniformBuffer, ShaderStages.Vertex)));
-
-            VertexLayoutDescription vertexLayout = new(
-                new VertexElementDescription("Position", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
-                new VertexElementDescription("Normal", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
-                new VertexElementDescription("UV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
-                new VertexElementDescription("Color", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
 
             ShaderDescription vertexShaderDesc = new(
                 ShaderStages.Vertex,
@@ -380,7 +356,7 @@ void main()
             pipelineDescription.PrimitiveTopology = PrimitiveTopology.TriangleList;
             pipelineDescription.ResourceLayouts = new ResourceLayout[] { _resourceLayout };
             pipelineDescription.ShaderSet = new ShaderSetDescription(
-                vertexLayouts: new VertexLayoutDescription[] { vertexLayout },
+                vertexLayouts: new VertexLayoutDescription[] { CSGScene.vertexLayout },
                 shaders: _shaders);
             pipelineDescription.Outputs = new OutputDescription(
                 new OutputAttachmentDescription(depthFormat), 
@@ -391,10 +367,16 @@ void main()
             _imguiRenderer = new ImGuiRenderer(_gd, _gd.MainSwapchain.Framebuffer.OutputDescription,
                 (int)_gd.MainSwapchain.Framebuffer.Width, (int)_gd.MainSwapchain.Framebuffer.Height);
 
-            _topLeftViewport = new Viewport(_gd, _factory, _imguiRenderer);
-            _topRightViewport = new Viewport(_gd, _factory, _imguiRenderer);
-            _bottomLeftViewport = new Viewport(_gd, _factory, _imguiRenderer);
-            _bottomRightViewport = new Viewport(_gd, _factory, _imguiRenderer);
+            _builtScene = scene.Build(_gd, _factory);
+
+            _topLeftViewport = new Viewport(_gd, _factory, _imguiRenderer, 
+                _resourceLayout, _pipeline, _builtScene, "Top Left");
+            _topRightViewport = new Viewport(_gd, _factory, _imguiRenderer, 
+                _resourceLayout, _pipeline, _builtScene, "Top Right");
+            _bottomLeftViewport = new Viewport(_gd, _factory, _imguiRenderer, 
+                _resourceLayout, _pipeline, _builtScene, "Bottom Left");
+            _bottomRightViewport = new Viewport(_gd, _factory, _imguiRenderer, 
+                _resourceLayout, _pipeline, _builtScene, "Bottom Right");
 
             _deltaTimer.Start();
 
@@ -514,13 +496,12 @@ void main()
                     _bottomRightViewport.Dispose();
                     
                     _imguiRenderer.Dispose();
+                    _builtScene.Dispose();
                     _pipeline?.Dispose();
                     foreach (Shader shader in _shaders)
                         shader.Dispose();
                     _resourceLayout.Dispose();
                     _cl.Dispose();
-                    _vertexBuffer.Dispose();
-                    _indexBuffer.Dispose();
                     _gd.Dispose();
                 }
 
