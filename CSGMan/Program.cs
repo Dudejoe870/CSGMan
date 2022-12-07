@@ -1,6 +1,7 @@
 ﻿using CSG.Shapes;
 using CSG;
 using System.Numerics;
+using CSGMan.Renderer;
 
 namespace CSGMan
 {
