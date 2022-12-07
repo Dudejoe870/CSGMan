@@ -1,20 +1,19 @@
-﻿using ImGuiNET;
+﻿using CSGMan.Renderer;
+using ImGuiNET;
 using System.Numerics;
 using Veldrid;
 using Veldrid.Sdl2;
+using Vulkan.Xlib;
 
 namespace CSGMan.UI
 {
     public class MainUI : IDisposable
     {
-        private GraphicsDevice _gd;
-        private ResourceFactory _factory;
-        private Sdl2Window _window;
+        private GraphicsContext _context;
 
         private CSGScene _scene;
 
         private Pipeline _pipeline;
-        private CSGScene.Built _builtScene;
 
         private ImGuiRenderer _imguiRenderer;
 
@@ -25,36 +24,27 @@ namespace CSGMan.UI
 
         public bool IsDisposed { get; private set; }
 
-        public MainUI(GraphicsDevice gd, ResourceFactory factory,
-            ResourceLayout cameraResourceLayout,
-            Pipeline pipeline, CSGScene scene,
-            CSGScene.Built builtScene,
-            Sdl2Window window)
+        public MainUI(GraphicsContext context, Pipeline pipeline, CSGScene scene)
         {
-            _gd = gd;
-            _factory = factory;
+            _context = context;
+
             _scene = scene;
             _pipeline = pipeline;
-            _builtScene = builtScene;
-            _window = window;
+            _scene = scene;
 
-            _imguiRenderer = new ImGuiRenderer(_gd, _gd.MainSwapchain.Framebuffer.OutputDescription,
-                (int)_gd.MainSwapchain.Framebuffer.Width, (int)_gd.MainSwapchain.Framebuffer.Height);
+            _imguiRenderer = new ImGuiRenderer(context.gd, context.gd.MainSwapchain.Framebuffer.OutputDescription,
+                (int)context.gd.MainSwapchain.Framebuffer.Width, (int)context.gd.MainSwapchain.Framebuffer.Height);
 
-            _topLeftViewport = new ViewportUI(gd, factory, _imguiRenderer,
-                cameraResourceLayout, pipeline, builtScene, "Top Left");
-            _topRightViewport = new ViewportUI(gd, factory, _imguiRenderer,
-                cameraResourceLayout, pipeline, builtScene, "Top Right");
-            _bottomLeftViewport = new ViewportUI(gd, factory, _imguiRenderer,
-                cameraResourceLayout, pipeline, builtScene, "Bottom Left");
-            _bottomRightViewport = new ViewportUI(gd, factory, _imguiRenderer,
-                cameraResourceLayout, pipeline, builtScene, "Bottom Right");
+            _topLeftViewport = new ViewportUI(context, _imguiRenderer, pipeline, scene, "Top Left");
+            _topRightViewport = new ViewportUI(context, _imguiRenderer, pipeline, scene, "Top Right");
+            _bottomLeftViewport = new ViewportUI(context, _imguiRenderer, pipeline, scene, "Bottom Left");
+            _bottomRightViewport = new ViewportUI(context, _imguiRenderer, pipeline, scene, "Bottom Right");
 
-            window.Resized += () =>
+            context.window.Resized += () =>
             {
                 _imguiRenderer.WindowResized(
-                    (int)_gd.MainSwapchain.Framebuffer.Width,
-                    (int)_gd.MainSwapchain.Framebuffer.Height);
+                    (int)context.gd.MainSwapchain.Framebuffer.Width,
+                    (int)context.gd.MainSwapchain.Framebuffer.Height);
             };
         }
 
@@ -66,8 +56,8 @@ namespace CSGMan.UI
 
         private void RenderUI(float deltaTime)
         {
-            float windowWidth = _window.Width;
-            float windowHeight = _window.Height;
+            float windowWidth = _context.window.Width;
+            float windowHeight = _context.window.Height;
 
             float sidebarWidth = windowWidth * 0.03f;
 
@@ -126,9 +116,9 @@ namespace CSGMan.UI
             _bottomLeftViewport.Render(cl);
             _bottomRightViewport.Render(cl);
 
-            cl.SetFramebuffer(_gd.MainSwapchain.Framebuffer);
+            cl.SetFramebuffer(_context.gd.MainSwapchain.Framebuffer);
             cl.ClearColorTarget(0, RgbaFloat.Black);
-            _imguiRenderer.Render(_gd, cl);
+            _imguiRenderer.Render(_context.gd, cl);
         }
 
         protected virtual void Dispose(bool disposing)
@@ -137,7 +127,7 @@ namespace CSGMan.UI
             {
                 if (disposing)
                 {
-                    _gd.WaitForIdle();
+                    _context.gd.WaitForIdle();
 
                     _topLeftViewport.Dispose();
                     _topRightViewport.Dispose();

@@ -9,7 +9,9 @@ namespace CSGMan
     {
         public static void Main()
         {
-            CSGScene scene = new();
+            GraphicsContext context = new();
+
+            CSGScene scene = new(context);
             {
                 Cylinder shape1 = new(start: new Vector3(0, 2, 0), end: new Vector3(0, -2, 0), radius: 2, tessellation: 16);
                 Cube shape2 = new(position: new Vector3(0, 0, 0), size: new Vector3(2, 1, 1));
@@ -26,7 +28,7 @@ namespace CSGMan
                 brush2.AddChild(brush3);
             }
 
-            MainRenderer mainRenderer = new(scene);
+            MainRenderer mainRenderer = new(context, scene);
 
             while (!mainRenderer.ShouldStop())
             {

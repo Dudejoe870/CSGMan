@@ -1,16 +1,20 @@
 ﻿using CSG;
 using CSG.Shapes;
+using CSGMan.Renderer;
 using System.Numerics;
+using System.Transactions;
 using Veldrid;
 
 namespace CSGMan
 {
-    public class CSGScene
+    public class CSGScene : IDisposable
     {
         public class Node
         {
-            public Node? parent = null;
+            public Node? Parent { get; private set; }
             private List<Node> _children = new();
+
+            public bool Invalidated { get; private set; }
 
             public bool visible = true;
 
@@ -18,15 +22,33 @@ namespace CSGMan
             {
             }
 
-            public Node(Node parent)
+            public void Invalidate()
             {
-                this.parent = parent;
+                Invalidated = true;
+                OnInvalidate();
+                if (Parent != null && !Parent.Invalidated)
+                    Parent.Invalidate();
+            }
+
+            public virtual void OnInvalidate() { }
+
+            public void Validate()
+            {
+                Invalidated = false;
             }
 
             public void AddChild(Node node)
             {
                 _children.Add(node);
-                node.parent = this;
+                node.Parent = this;
+                node.Invalidate();
+            }
+
+            public void Remove()
+            {
+                Parent?._children.Remove(this);
+                foreach (Node child in _children)
+                    child.Remove();
             }
 
             public IEnumerable<Node> GetChildren()
@@ -35,20 +57,63 @@ namespace CSGMan
             }
         }
 
-        public Node root = new();
+        public class RootNode : Node
+        {
+            private CSGScene _scene;
 
-        // TODO: Only build the subtrees of the CSG Tree that were modified.
+            public RootNode(CSGScene scene)
+            {
+                _scene = scene;
+            }
+
+            public override void OnInvalidate()
+            {
+                _scene.Invalidate();
+            }
+        }
+
+        public RootNode root;
+
+        private GraphicsContext _context;
+
+        public CSGScene(GraphicsContext context)
+        {
+            _context = context;
+
+            root = new RootNode(this);
+        }
+
+        private Built? _builtScene = null;
+        public Built BuiltScene => _builtScene ??= Build();
+
+        public void Invalidate()
+        {
+            _builtScene?.Dispose();
+            _builtScene = null;
+        }
+
         private void BuildNode(Node node)
         {
-            foreach (Node child in node.GetChildren())
-                BuildNode(child);
+            if (!node.Invalidated) return;
 
-            if (node.parent != null)
-                if (node is CSGBrush childBrush && node.parent is CSGBrush parentBrush)
+            if (node is CSGBrush brush)
+                brush.shape = brush.baseShape;
+
+            foreach (Node child in node.GetChildren())
+            {
+                if (child is CSGBrush childBrush)
+                    if (childBrush.baseShape.IsInvalidated)
+                        child.Invalidate();
+                if (child.Invalidated) BuildNode(child);
+            }
+            node.Validate();
+
+            if (node.Parent != null)
+                if (node is CSGBrush childBrush && node.Parent is CSGBrush parentBrush)
                     parentBrush.shape = parentBrush.shape.Do(childBrush.operation, childBrush.shape);
         }
 
-        public Built Build(GraphicsDevice gd, ResourceFactory factory)
+        public Built Build()
         {
             // Build the CSG Tree.
             BuildNode(root);
@@ -69,17 +134,22 @@ namespace CSGMan
                 }
             }
 
-            var vertexBuffer = factory.CreateBuffer(new BufferDescription(
+            var vertexBuffer = _context.factory.CreateBuffer(new BufferDescription(
                 (uint)vertices.Count * Vertex.SizeInBytes,
                 BufferUsage.VertexBuffer));
-            var indexBuffer = factory.CreateBuffer(new BufferDescription(
+            var indexBuffer = _context.factory.CreateBuffer(new BufferDescription(
                 (uint)indices.Count * sizeof(uint),
                 BufferUsage.IndexBuffer));
 
-            gd.UpdateBuffer(vertexBuffer, 0, vertices.ToArray());
-            gd.UpdateBuffer(indexBuffer, 0, indices.ToArray());
+            _context.gd.UpdateBuffer(vertexBuffer, 0, vertices.ToArray());
+            _context.gd.UpdateBuffer(indexBuffer, 0, indices.ToArray());
 
-            return new(new Built.Mesh(vertexBuffer, indexBuffer, (uint)indices.Count), gd);
+            return new(new Built.Mesh(vertexBuffer, indexBuffer, (uint)indices.Count), _context);
+        }
+
+        public void Dispose()
+        {
+            _builtScene?.Dispose();
         }
 
         public readonly static VertexLayoutDescription vertexLayout = new(
@@ -90,7 +160,7 @@ namespace CSGMan
 
         public class Built : IDisposable
         {
-            private GraphicsDevice _gd;
+            private GraphicsContext _context;
 
             // TODO: There will be a single Mesh per texture.
             // Each Polygon will have its own texture ID,
@@ -124,9 +194,9 @@ namespace CSGMan
 
             public Mesh mesh;
 
-            public Built(Mesh mesh, GraphicsDevice gd)
+            public Built(Mesh mesh, GraphicsContext context)
             {
-                _gd = gd;
+                _context = context;
 
                 this.mesh = mesh;
             }
@@ -138,7 +208,7 @@ namespace CSGMan
 
             public void Dispose()
             {
-                _gd.WaitForIdle();
+                _context.gd.WaitForIdle();
 
                 mesh.Dispose();
             }

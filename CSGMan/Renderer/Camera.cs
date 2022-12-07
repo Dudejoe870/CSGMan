@@ -17,7 +17,7 @@ namespace CSGMan.Renderer
 
     public class Camera
     {
-        private GraphicsDevice _gd;
+        private GraphicsContext _context;
 
         public DeviceBuffer cameraInfoBuffer;
         public GpuCameraInfo cameraInfo = new();
@@ -27,15 +27,15 @@ namespace CSGMan.Renderer
         public Vector3 forward = -Vector3.UnitZ;
         public Vector3 up = Vector3.UnitY;
 
-        public Camera(GraphicsDevice gd, ResourceFactory factory, ResourceLayout cameraResourceLayout)
+        public Camera(GraphicsContext context)
         {
-            _gd = gd;
+            _context = context;
 
-            cameraInfoBuffer = factory.CreateBuffer(new BufferDescription(
+            cameraInfoBuffer = context.factory.CreateBuffer(new BufferDescription(
                 (uint)Unsafe.SizeOf<GpuCameraInfo>(),
                 BufferUsage.UniformBuffer));
-            resourceSet = factory.CreateResourceSet(
-                new ResourceSetDescription(cameraResourceLayout, cameraInfoBuffer));
+            resourceSet = context.factory.CreateResourceSet(
+                new ResourceSetDescription(context.cameraResourceLayout, cameraInfoBuffer));
         }
 
         public void UploadToGPU(CommandList cl)
@@ -65,7 +65,7 @@ namespace CSGMan.Renderer
 
         public void Dispose()
         {
-            _gd.WaitForIdle();
+            _context.gd.WaitForIdle();
 
             cameraInfoBuffer.Dispose();
         }

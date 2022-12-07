@@ -13,21 +13,14 @@ namespace CSGMan.Renderer
         public const PixelFormat colorFormat = PixelFormat.R8_G8_B8_A8_UNorm;
         public const PixelFormat depthFormat = PixelFormat.D24_UNorm_S8_UInt;
 
+        private GraphicsContext _context;
+
         private CSGScene _scene;
-
-        private Sdl2Window _window;
-        private GraphicsDevice _gd;
-
-        private ResourceFactory _factory;
 
         private CommandList _cl;
 
-        private ResourceLayout _cameraResourceLayout;
-
         private Shader[] _shaders;
         private Pipeline _pipeline;
-
-        private CSGScene.Built _builtScene;
 
         private MainUI _mainUI;
 
@@ -75,30 +68,10 @@ void main()
     fsout_Color = vec4(vec3(light), 1);
 }";
 
-        public MainRenderer(CSGScene scene)
+        public MainRenderer(GraphicsContext context, CSGScene scene)
         {
+            _context = context;
             _scene = scene;
-
-            _window = VeldridStartup.CreateWindow(new WindowCreateInfo()
-            {
-                X = 100,
-                Y = 100,
-                WindowWidth = 1280,
-                WindowHeight = 720,
-                WindowTitle = "CSGMan"
-            });
-
-            _gd = VeldridStartup.CreateGraphicsDevice(_window, new GraphicsDeviceOptions()
-            {
-                PreferStandardClipSpaceYDirection = true,
-                PreferDepthRangeZeroToOne = true,
-                ResourceBindingModel = ResourceBindingModel.Improved,
-                Debug = true
-            });
-            _factory = _gd.ResourceFactory;
-
-            _cameraResourceLayout = _factory.CreateResourceLayout(new ResourceLayoutDescription(
-                new ResourceLayoutElementDescription("CameraBuffer", ResourceKind.UniformBuffer, ShaderStages.Vertex)));
 
             ShaderDescription vertexShaderDesc = new(
                 ShaderStages.Vertex,
@@ -109,7 +82,7 @@ void main()
                 Encoding.UTF8.GetBytes(_fragmentCode),
                 "main");
 
-            _shaders = _factory.CreateFromSpirv(vertexShaderDesc, fragmentShaderDesc);
+            _shaders = context.factory.CreateFromSpirv(vertexShaderDesc, fragmentShaderDesc);
 
             GraphicsPipelineDescription pipelineDescription = new();
             pipelineDescription.BlendState = BlendStateDescription.SingleOverrideBlend;
@@ -124,40 +97,30 @@ void main()
                 depthClipEnabled: true,
                 scissorTestEnabled: false);
             pipelineDescription.PrimitiveTopology = PrimitiveTopology.TriangleList;
-            pipelineDescription.ResourceLayouts = new ResourceLayout[] { _cameraResourceLayout };
+            pipelineDescription.ResourceLayouts = new ResourceLayout[] { _context.cameraResourceLayout };
             pipelineDescription.ShaderSet = new ShaderSetDescription(
                 vertexLayouts: new VertexLayoutDescription[] { CSGScene.vertexLayout },
                 shaders: _shaders);
             pipelineDescription.Outputs = new OutputDescription(
                 new OutputAttachmentDescription(depthFormat),
                 new OutputAttachmentDescription(colorFormat));
-            _pipeline = _factory.CreateGraphicsPipeline(pipelineDescription);
+            _pipeline = context.factory.CreateGraphicsPipeline(pipelineDescription);
 
-            _cl = _gd.ResourceFactory.CreateCommandList();
+            _cl = context.gd.ResourceFactory.CreateCommandList();
 
-            _builtScene = scene.Build(_gd, _factory);
-
-            _mainUI = new MainUI(_gd, _factory,
-                _cameraResourceLayout, _pipeline,
-                scene, _builtScene,
-                _window);
+            _mainUI = new MainUI(context, _pipeline, scene);
 
             _deltaTimer.Start();
-
-            _window.Resized += () =>
-            {
-                _gd.ResizeMainWindow((uint)_window.Width, (uint)_window.Height);
-            };
         }
 
         public bool ShouldStop()
         {
-            return !_window.Exists;
+            return !_context.window.Exists;
         }
 
         public void Render()
         {
-            InputSnapshot input = _window.PumpEvents();
+            InputSnapshot input = _context.window.PumpEvents();
 
             ulong timeNS = (ulong)((float)_deltaTimer.ElapsedTicks / Stopwatch.Frequency * 1000000000.0);
             ulong deltaTimeNS = timeNS - _lastTimeNS;
@@ -170,14 +133,14 @@ void main()
             }
             _cl.End();
 
-            _gd.SubmitCommands(_cl);
+            _context.gd.SubmitCommands(_cl);
 
             // Technically this is inefficient.
             // However this is just a tool, so I'm not going to concern my self with optimal API usage.
             // I'd rather actually get it done.
-            _gd.WaitForIdle();
+            _context.gd.WaitForIdle();
 
-            _gd.SwapBuffers();
+            _context.gd.SwapBuffers();
 
             _lastTimeNS = timeNS;
         }
@@ -188,17 +151,15 @@ void main()
             {
                 if (disposing)
                 {
-                    _gd.WaitForIdle();
+                    _context.gd.WaitForIdle();
 
                     _mainUI.Dispose();
 
-                    _builtScene.Dispose();
+                    _scene.Dispose();
                     _pipeline?.Dispose();
                     foreach (Shader shader in _shaders)
                         shader.Dispose();
-                    _cameraResourceLayout.Dispose();
                     _cl.Dispose();
-                    _gd.Dispose();
                 }
 
                 IsDisposed = true;

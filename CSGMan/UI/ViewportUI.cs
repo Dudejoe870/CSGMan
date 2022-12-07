@@ -11,11 +11,10 @@ namespace CSGMan.UI
 
         private const float _mouseSensitivity = 0.5f;
 
-        private GraphicsDevice _gd;
-        private ResourceFactory _factory;
+        private GraphicsContext _context;
         private ImGuiRenderer _imguiRenderer;
         private Pipeline _pipeline;
-        private CSGScene.Built _scene;
+        private CSGScene _scene;
 
         private Camera _camera;
 
@@ -31,24 +30,23 @@ namespace CSGMan.UI
         public float yaw = -90.0f;
         public float pitch = 0.0f;
 
-        public ViewportUI(GraphicsDevice gd, ResourceFactory factory,
-            ImGuiRenderer imguiRenderer,
-            ResourceLayout cameraResourceLayout, Pipeline pipeline,
-            CSGScene.Built scene, string name)
+        public ViewportUI(GraphicsContext context,
+            ImGuiRenderer imguiRenderer, Pipeline pipeline,
+            CSGScene scene, string name)
         {
-            _factory = factory;
-            _gd = gd;
+            _context = context;
+
             _imguiRenderer = imguiRenderer;
             _pipeline = pipeline;
             _scene = scene;
 
-            _camera = new Camera(gd, factory, cameraResourceLayout);
+            _camera = new Camera(context);
             this.name = name;
         }
 
         public void Resize(Vector2 size)
         {
-            _gd.WaitForIdle();
+            _context.gd.WaitForIdle();
 
             if (_tex != null)
             {
@@ -58,19 +56,19 @@ namespace CSGMan.UI
             _depthTex?.Dispose();
             _framebuffer?.Dispose();
 
-            _tex = _factory.CreateTexture(new TextureDescription(
+            _tex = _context.factory.CreateTexture(new TextureDescription(
                 (uint)size.X, (uint)size.Y, 1, 1, 1,
                 MainRenderer.colorFormat,
                 TextureUsage.Sampled | TextureUsage.RenderTarget,
                 TextureType.Texture2D));
-            _depthTex = _factory.CreateTexture(new TextureDescription(
+            _depthTex = _context.factory.CreateTexture(new TextureDescription(
                 (uint)size.X, (uint)size.Y, 1, 1, 1,
                 MainRenderer.depthFormat,
                 TextureUsage.DepthStencil,
                 TextureType.Texture2D));
-            _framebuffer = _factory.CreateFramebuffer(new FramebufferDescription(
+            _framebuffer = _context.factory.CreateFramebuffer(new FramebufferDescription(
                 _depthTex, _tex));
-            _texId = _imguiRenderer.GetOrCreateImGuiBinding(_factory, _tex);
+            _texId = _imguiRenderer.GetOrCreateImGuiBinding(_context.factory, _tex);
         }
 
         public void UpdateAndRenderUI(float deltaTime)
@@ -155,12 +153,12 @@ namespace CSGMan.UI
 
             cl.SetPipeline(_pipeline);
             _camera.Bind(cl);
-            _scene.Draw(cl);
+            _scene.BuiltScene.Draw(cl);
         }
 
         public void Dispose()
         {
-            _gd.WaitForIdle();
+            _context.gd.WaitForIdle();
 
             _camera.Dispose();
 
