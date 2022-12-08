@@ -20,11 +20,11 @@ namespace CSGMan
                 /*
                  * shape3 - (shape1 U shape2)
                  */
-                CSGBrush brush1 = new(shape3, ShapeOperation.Union);
+                CSGBrush brush1 = new("Cube1", shape3, ShapeOperation.Union);
                 scene.root.AddChild(brush1);
-                CSGBrush brush2 = new(shape1, ShapeOperation.Subtract);
+                CSGBrush brush2 = new("Cylinder", shape1, ShapeOperation.Subtract);
                 brush1.AddChild(brush2);
-                CSGBrush brush3 = new(shape2, ShapeOperation.Union);
+                CSGBrush brush3 = new("Cube2", shape2, ShapeOperation.Union);
                 brush2.AddChild(brush3);
             }
 

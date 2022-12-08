@@ -1,8 +1,6 @@
 ﻿using CSG;
-using CSG.Shapes;
 using CSGMan.Renderer;
-using System.Numerics;
-using System.Transactions;
+using System.Diagnostics;
 using Veldrid;
 
 namespace CSGMan
@@ -11,15 +9,28 @@ namespace CSGMan
     {
         public class Node
         {
+            public string name;
+
             public Node? Parent { get; private set; }
             private List<Node> _children = new();
 
+            public int ChildCount => _children.Count;
+
             public bool Invalidated { get; private set; }
 
-            public bool visible = true;
+            public bool Visible { get; private set; }
 
-            public Node()
+            public Node(string name)
             {
+                this.name = name;
+                Visible = true;
+            }
+
+            public void SetVisible(bool visible)
+            {
+                if (Visible != visible)
+                    Invalidate();
+                Visible = visible;
             }
 
             public void Invalidate()
@@ -47,8 +58,13 @@ namespace CSGMan
             public void Remove()
             {
                 Parent?._children.Remove(this);
-                foreach (Node child in _children)
+
+                // Have to copy it so it doesn't get modified in
+                // the middle of looping through it, which is invalid.
+                Node[] childrenCopy = _children.ToArray();
+                foreach (Node child in childrenCopy)
                     child.Remove();
+                Parent?.Invalidate();
             }
 
             public IEnumerable<Node> GetChildren()
@@ -62,6 +78,7 @@ namespace CSGMan
             private CSGScene _scene;
 
             public RootNode(CSGScene scene)
+                : base("root")
             {
                 _scene = scene;
             }
@@ -94,19 +111,15 @@ namespace CSGMan
 
         private void BuildNode(Node node)
         {
-            if (!node.Invalidated) return;
-
-            if (node is CSGBrush brush)
-                brush.shape = brush.baseShape;
-
-            foreach (Node child in node.GetChildren())
+            if (node.Invalidated && node.Visible)
             {
-                if (child is CSGBrush childBrush)
-                    if (childBrush.baseShape.IsInvalidated)
-                        child.Invalidate();
-                if (child.Invalidated) BuildNode(child);
+                if (node is CSGBrush brush)
+                    brush.shape = brush.baseShape;
+
+                foreach (Node child in node.GetChildren())
+                    BuildNode(child);
+                node.Validate();
             }
-            node.Validate();
 
             if (node.Parent != null)
                 if (node is CSGBrush childBrush && node.Parent is CSGBrush parentBrush)
@@ -115,8 +128,16 @@ namespace CSGMan
 
         public Built Build()
         {
-            // Build the CSG Tree.
-            BuildNode(root);
+            try
+            {
+                // Build the CSG Tree.
+                BuildNode(root);
+            } 
+            catch
+            {
+                Console.WriteLine("!!!");
+                return new(_context);
+            }
 
             // Combine all the top-level Meshes together into one Vertex and Index Buffer.
             List<Vertex> vertices = new();
@@ -125,7 +146,7 @@ namespace CSGMan
             uint indexOffset = 0;
             foreach (Node child in root.GetChildren())
             {
-                if (child is CSGBrush childBrush)
+                if (child.Visible && child is CSGBrush childBrush)
                 {
                     vertices.AddRange(childBrush.shape.Vertices);
                     foreach (uint index in childBrush.shape.Indices)
@@ -133,6 +154,9 @@ namespace CSGMan
                     indexOffset += (uint)childBrush.shape.Vertices.Length;
                 }
             }
+
+            if (indices.Count == 0)
+                return new(_context);
 
             var vertexBuffer = _context.factory.CreateBuffer(new BufferDescription(
                 (uint)vertices.Count * Vertex.SizeInBytes,
@@ -192,7 +216,12 @@ namespace CSGMan
                 }
             }
 
-            public Mesh mesh;
+            public Mesh? mesh = null;
+
+            public Built(GraphicsContext context)
+            {
+                _context = context;
+            }
 
             public Built(Mesh mesh, GraphicsContext context)
             {
@@ -203,14 +232,14 @@ namespace CSGMan
 
             public void Draw(CommandList cl)
             {
-                mesh.Draw(cl);
+                mesh?.Draw(cl);
             }
 
             public void Dispose()
             {
                 _context.gd.WaitForIdle();
 
-                mesh.Dispose();
+                mesh?.Dispose();
             }
         }
     }
